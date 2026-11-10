@@ -10,6 +10,9 @@
  * published by the Free Software Foundation.
  */
 #include "sched.h"
+#ifdef CONFIG_SCHED_BORE
+#include <linux/sched/bore.h>
+#endif /* CONFIG_SCHED_BORE */
 
 #include <linux/kallsyms.h>
 #include <linux/mempolicy.h>
@@ -954,6 +957,9 @@ void proc_sched_show_task(struct task_struct *p, struct pid_namespace *ns,
 		   "nr_involuntary_switches", (long long)p->nivcsw);
 
 	P(se.load.weight);
+#ifdef CONFIG_SCHED_BORE
+	__P(bore_score(p));
+#endif /* CONFIG_SCHED_BORE */
 #ifdef CONFIG_SMP
 	P(se.avg.load_sum);
 	P(se.avg.util_sum);

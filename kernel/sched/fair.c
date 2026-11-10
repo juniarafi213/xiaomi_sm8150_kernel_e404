@@ -1147,7 +1147,11 @@ struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
  */
 static inline void set_protect_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
+#ifdef CONFIG_SCHED_BORE
+	u64 slice = sysctl_sched_base_slice;
+#else
 	u64 slice = normalized_sysctl_sched_base_slice;
+#endif
 	u64 vprot = se->deadline;
 
 	if (sched_feat(RUN_TO_PARITY))

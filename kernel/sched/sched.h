@@ -1283,10 +1283,23 @@ static inline struct rq *rq_of(struct cfs_rq *cfs_rq)
 {
 	return cfs_rq->rq;
 }
+
+static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
+{
+	return se->cfs_rq;
+}
 #else
 static inline struct rq *rq_of(struct cfs_rq *cfs_rq)
 {
 	return container_of(cfs_rq, struct rq, cfs);
+}
+
+static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
+{
+	struct task_struct *p = container_of(se, struct task_struct, se);
+	struct rq *rq = task_rq(p);
+
+	return &rq->cfs;
 }
 #endif
 
@@ -2627,7 +2640,6 @@ extern struct sched_entity *__pick_last_entity(struct cfs_rq *cfs_rq);
 #ifdef	CONFIG_SCHED_DEBUG
 extern bool sched_debug_enabled;
 extern int entity_eligible(struct cfs_rq *cfs_rq, struct sched_entity *se);
-extern struct cfs_rq *cfs_rq_of(struct sched_entity *se);
 extern void print_cfs_stats(struct seq_file *m, int cpu);
 extern void print_rt_stats(struct seq_file *m, int cpu);
 extern void print_dl_stats(struct seq_file *m, int cpu);

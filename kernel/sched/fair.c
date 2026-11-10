@@ -303,12 +303,6 @@ static inline struct cfs_rq *task_cfs_rq(struct task_struct *p)
 	return p->se.cfs_rq;
 }
 
-/* runqueue on which this entity is (to be) queued */
-static inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
-{
-	return se->cfs_rq;
-}
-
 /* runqueue "owned" by this group */
 static inline struct cfs_rq *group_cfs_rq(struct sched_entity *grp)
 {
@@ -473,14 +467,6 @@ static inline struct task_struct *task_of(struct sched_entity *se)
 static inline struct cfs_rq *task_cfs_rq(struct task_struct *p)
 {
 	return &task_rq(p)->cfs;
-}
-
-inline struct cfs_rq *cfs_rq_of(struct sched_entity *se)
-{
-	struct task_struct *p = task_of(se);
-	struct rq *rq = task_rq(p);
-
-	return &rq->cfs;
 }
 
 /* runqueue "owned" by this group */

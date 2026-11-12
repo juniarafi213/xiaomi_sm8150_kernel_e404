@@ -22,6 +22,7 @@
 #include <linux/msm_adreno_devfreq.h>
 #include <linux/of_device.h>
 #include <linux/thermal.h>
+#include <linux/e404_attributes.h>
 
 #include "kgsl.h"
 #include "kgsl_pwrscale.h"
@@ -2276,7 +2277,7 @@ static bool pwrlevel_uses_ib(struct msm_bus_scale_pdata *bus_scale_table,
 
 int kgsl_pwrctrl_init(struct kgsl_device *device)
 {
-	int i, k, m, n = 0, result, freq;
+	int i, k, m, n = 0, result, freq, eff_level;
 	struct platform_device *pdev = device->pdev;
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct device_node *ocmem_bus_node;
@@ -2333,6 +2334,25 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		if (freq >= pwr->pwrlevels[i].gpu_freq)
 			pwr->pwrlevels[i].gpu_freq = freq;
 	}
+
+	if (e404_data.effcpu || early_effcpu) {
+		eff_level = _get_nearest_pwrlevel(pwr, 585000000);
+		if (eff_level >= 0)
+			pwr->max_pwrlevel = eff_level;
+		else
+			pwr->max_pwrlevel = 2;
+		pr_info("kgsl: e404 effcpu active, capped max_pwrlevel=%u (%u Hz)\n",
+			pwr->max_pwrlevel, pwr->pwrlevels[pwr->max_pwrlevel].gpu_freq);
+	} else {
+		pwr->max_pwrlevel = 0;
+		pr_info("kgsl: e404 effcpu inactive, max_pwrlevel=0 (%u Hz)\n",
+			pwr->pwrlevels[0].gpu_freq);
+	}
+
+	if (pwr->default_pwrlevel < pwr->max_pwrlevel)
+		pwr->default_pwrlevel = pwr->max_pwrlevel;
+	if (pwr->active_pwrlevel < pwr->max_pwrlevel)
+		pwr->active_pwrlevel = pwr->max_pwrlevel;
 
 	kgsl_pwrctrl_disable_unused_opp(device);
 

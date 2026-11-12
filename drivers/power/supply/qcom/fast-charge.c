@@ -9,6 +9,7 @@
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
 #include <linux/init.h>
+#include <linux/workqueue.h>
 #include <linux/pmic-voter.h>
 
 #define FAST_CHARGE_VOTER		"FAST_CHARGE_VOTER"
@@ -18,15 +19,21 @@
 #define FAST_CHARGE_ICL_UA		6000000
 #define FAST_CHARGE_FCC_UA		6000000
 
+#define MAX_INIT_RETRIES		30
+
 static struct kobject *fast_charge_kobj;
 static int force_fast_charge = 1;
 extern bool skip_thermal;
 
+static struct delayed_work fast_charge_work;
+static int init_retry_count;
+
 static void fast_charge_apply(bool enable)
 {
-	skip_thermal = enable; 
 	struct votable *fcc_votable     = find_votable("FCC");
 	struct votable *usb_icl_votable = find_votable("USB_ICL");
+
+	skip_thermal = enable;
 
 	if (enable) {
 		if (fcc_votable) {
@@ -50,6 +57,26 @@ static void fast_charge_apply(bool enable)
 	}
 }
 
+static void fast_charge_work_fn(struct work_struct *work)
+{
+	struct votable *fcc_votable     = find_votable("FCC");
+	struct votable *usb_icl_votable = find_votable("USB_ICL");
+
+	if (!fcc_votable || !usb_icl_votable) {
+		if (++init_retry_count < MAX_INIT_RETRIES) {
+			schedule_delayed_work(&fast_charge_work,
+					      msecs_to_jiffies(1000));
+			return;
+		}
+		pr_warn("fast_charge: votables not ready after %d retries\n",
+			MAX_INIT_RETRIES);
+		return;
+	}
+
+	if (force_fast_charge)
+		fast_charge_apply(true);
+}
+
 static ssize_t force_fast_charge_show(struct kobject *kobj,
 				      struct kobj_attribute *attr, char *buf)
 {
@@ -67,8 +94,6 @@ static ssize_t force_fast_charge_store(struct kobject *kobj,
 		return ret;
 	if (val < 0 || val > 1)
 		return -EINVAL;
-	if (val == force_fast_charge)
-		return count;
 
 	force_fast_charge = val;
 	fast_charge_apply(!!val);
@@ -98,14 +123,30 @@ static int __init fast_charge_init(void)
 		return -ENOMEM;
 
 	ret = sysfs_create_group(fast_charge_kobj, &fast_charge_attr_group);
-	if (ret)
+	if (ret) {
 		kobject_put(fast_charge_kobj);
+		return ret;
+	}
 
-	return ret;
+	INIT_DELAYED_WORK(&fast_charge_work, fast_charge_work_fn);
+
+	if (force_fast_charge) {
+		struct votable *fcc = find_votable("FCC");
+		struct votable *icl = find_votable("USB_ICL");
+
+		if (fcc && icl)
+			fast_charge_apply(true);
+		else
+			schedule_delayed_work(&fast_charge_work,
+					      msecs_to_jiffies(1000));
+	}
+
+	return 0;
 }
 
 static void __exit fast_charge_exit(void)
 {
+	cancel_delayed_work_sync(&fast_charge_work);
 	if (force_fast_charge)
 		fast_charge_apply(false);
 
@@ -113,7 +154,7 @@ static void __exit fast_charge_exit(void)
 	kobject_put(fast_charge_kobj);
 }
 
-module_init(fast_charge_init);
+late_initcall(fast_charge_init);
 module_exit(fast_charge_exit);
 
 MODULE_DESCRIPTION("Fast charging driver");

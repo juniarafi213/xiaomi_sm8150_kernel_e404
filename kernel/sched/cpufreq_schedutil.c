@@ -1104,6 +1104,75 @@ struct cpufreq_governor *cpufreq_default_governor(void)
 }
 #endif
 
+/**
+ * rfx_get_util_gki510 - Util getter for Vorpal Governor.
+ */
+void rfx_get_util_gki510(int cpu, unsigned long boost,
+			 unsigned long *out_util, unsigned long *out_bw_min)
+{
+	struct rq *rq = cpu_rq(cpu);
+	unsigned long util, dl_util, irq, max_cap;
+
+	max_cap = (unsigned long)arch_scale_cpu_capacity(cpu);
+
+	*out_bw_min = cpu_bw_dl(rq);
+
+	irq = cpu_util_irq(rq);
+	if (unlikely(irq >= max_cap)) {
+		util = max_cap;
+		goto boosted;
+	}
+	util = uclamp_rq_util_with(rq, cpu_util_cfs(rq) + cpu_util_rt(rq), NULL);
+	dl_util = cpu_util_dl(rq);
+	/* Real saturation: no idle time left, fmax is correct here. */
+	if (util + dl_util >= max_cap) {
+		util = max_cap;
+		goto boosted;
+	}
+	util = scale_irq_capacity(util, irq, max_cap);
+	util += irq + cpu_bw_dl(rq);
+	util = min(util, max_cap);
+
+boosted:
+	if (boost > util)
+		util = boost;
+
+	/* 25% DVFS headroom — equivalent to map_util_perf() in newer kernels */
+	util = util + (util >> 2);
+
+	*out_util = min(util, max_cap);
+}
+EXPORT_SYMBOL_GPL(rfx_get_util_gki510);
+
+/**
+ * rfx_dl_bw_exceeded_gki510 - DL bandwidth check for Vorpal.
+ */
+bool rfx_dl_bw_exceeded_gki510(int cpu, unsigned long bw_min)
+{
+	return cpu_bw_dl(cpu_rq(cpu)) > bw_min;
+}
+EXPORT_SYMBOL_GPL(rfx_dl_bw_exceeded_gki510);
+
+/**
+ * rfx_setattr_sugov_gki510 - put Vorpal's DVFS worker in the SUGOV DL class.
+ */
+int rfx_setattr_sugov_gki510(struct task_struct *t)
+{
+	struct sched_attr attr = {
+		.size		= sizeof(struct sched_attr),
+		.sched_policy	= SCHED_DEADLINE,
+		.sched_flags	= SCHED_FLAG_SUGOV,
+		.sched_nice	= 0,
+		.sched_priority	= 0,
+		.sched_runtime	=  1000000,
+		.sched_deadline = 10000000,
+		.sched_period	= 10000000,
+	};
+
+	return sched_setattr_nocheck(t, &attr);
+}
+EXPORT_SYMBOL_GPL(rfx_setattr_sugov_gki510);
+
 static int __init sugov_register(void)
 {
 	return cpufreq_register_governor(&schedutil_gov);

@@ -32,8 +32,29 @@
 #include <linux/sysfs.h>
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
+#include <linux/sysctl.h>
 
 #include "zram_drv.h"
+
+#ifdef CONFIG_ZRAM_MULTI_COMP
+static int min_recomp = 0;
+static int max_recomp = 3;
+int sysctl_zram_recomp_immediate __read_mostly = 1;
+
+static struct ctl_table zram_sysctl_table[] = {
+	{
+		.procname	= "zram_recomp_immediate",
+		.data		= &sysctl_zram_recomp_immediate,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &min_recomp,
+		.extra2		= &max_recomp,
+	},
+	{ }
+};
+static struct ctl_table_header *zram_sysctl_table_header;
+#endif /* CONFIG_ZRAM_MULTI_COMP */
 
 static DEFINE_IDR(zram_index_idr);
 /* idr index must be protected */
@@ -1717,7 +1738,7 @@ static int write_same_filled_page(struct zram *zram, unsigned long fill,
 }
 
 static int write_incompressible_page(struct zram *zram, struct page *page,
-				     u32 index)
+				     u32 index, bool incompressible)
 {
 	unsigned long handle;
 	void *src;
@@ -1745,6 +1766,10 @@ static int write_incompressible_page(struct zram *zram, struct page *page,
 	zram_slot_lock(zram, index);
 	zram_free_page(zram, index);
 	zram_set_flag(zram, index, ZRAM_HUGE);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	if (incompressible)
+		zram_set_flag(zram, index, ZRAM_INCOMPRESSIBLE);
+#endif
 	zram_set_handle(zram, index, handle);
 	zram_set_obj_size(zram, index, PAGE_SIZE);
 	zram_slot_unlock(zram, index);
@@ -1763,9 +1788,13 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 	unsigned long handle;
 	unsigned int comp_len;
 	void *mem;
-	struct zcomp_strm *zstrm;
+	struct zcomp_strm *zstrm = NULL;
 	unsigned long element;
 	bool same_filled;
+	u8 prio = ZRAM_PRIMARY_COMP, prio_max = 1;
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	prio_max = min_t(u8, zram->num_active_comps, (u8)sysctl_zram_recomp_immediate + 1);
+#endif
 
 	mem = kmap_atomic(page);
 	same_filled = page_same_filled(mem, &element);
@@ -1773,21 +1802,36 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 	if (same_filled)
 		return write_same_filled_page(zram, element, index);
 
-	zstrm = zcomp_stream_get(zram->comps[ZRAM_PRIMARY_COMP]);
-	mem = kmap_atomic(page);
-	ret = zcomp_compress(zram->comps[ZRAM_PRIMARY_COMP], zstrm,
-			     mem, &comp_len);
-	kunmap_atomic(mem);
+	for (prio = ZRAM_PRIMARY_COMP; prio < prio_max; prio++) {
+		if (!zram->comps[prio])
+			continue;
 
-	if (unlikely(ret)) {
+		zstrm = zcomp_stream_get(zram->comps[prio]);
+		mem = kmap_atomic(page);
+		ret = zcomp_compress(zram->comps[prio], zstrm,
+				     mem, &comp_len);
+		kunmap_atomic(mem);
+
+		if (unlikely(ret)) {
+			zcomp_stream_put(zstrm);
+			pr_err("Compression failed! err=%d\n", ret);
+			return ret;
+		}
+
+		if (comp_len < huge_class_size)
+			break;
+
 		zcomp_stream_put(zstrm);
-		pr_err("Compression failed! err=%d\n", ret);
-		return ret;
+		zstrm = NULL;
 	}
 
-	if (comp_len >= huge_class_size) {
-		zcomp_stream_put(zstrm);
-		return write_incompressible_page(zram, page, index);
+	if (!zstrm) {
+		bool incomp = false;
+#ifdef CONFIG_ZRAM_MULTI_COMP
+		if (prio >= zram->num_active_comps)
+			incomp = true;
+#endif
+		return write_incompressible_page(zram, page, index, incomp);
 	}
 
 	handle = zs_malloc(zram->mem_pool, comp_len,
@@ -1811,6 +1855,9 @@ static int zram_write_page(struct zram *zram, struct page *page, u32 index)
 	zram_free_page(zram, index);
 	zram_set_handle(zram, index, handle);
 	zram_set_obj_size(zram, index, comp_len);
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	zram_set_priority(zram, index, prio);
+#endif
 	zram_slot_unlock(zram, index);
 
 	/* Update stats */
@@ -2859,6 +2906,15 @@ static int __init zram_init(void)
 		num_devices--;
 	}
 
+#ifdef CONFIG_ZRAM_MULTI_COMP
+#define ZRAM_IR_VERSION "1.3"
+#define ZRAM_IR_PROGNAME "ZRAM Immediate Recompression (ZRAM-IR)"
+#define ZRAM_IR_AUTHOR   "Masahito Suzuki"
+	pr_info("%s %s by %s\n",
+		ZRAM_IR_PROGNAME, ZRAM_IR_VERSION, ZRAM_IR_AUTHOR);
+	zram_sysctl_table_header = register_sysctl("vm", zram_sysctl_table);
+#endif /* CONFIG_ZRAM_MULTI_COMP */
+
 	return 0;
 
 out_error:
@@ -2868,6 +2924,11 @@ out_error:
 
 static void __exit zram_exit(void)
 {
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	if (zram_sysctl_table_header)
+		unregister_sysctl_table(zram_sysctl_table_header);
+#endif /* CONFIG_ZRAM_MULTI_COMP */
+
 	destroy_devices();
 }
 

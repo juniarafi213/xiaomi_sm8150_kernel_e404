@@ -2681,6 +2681,9 @@ static int zram_add(void)
 	atomic_set(&zram->pp_in_progress, 0);
 	zram_comp_params_reset(zram);
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+#if defined(CONFIG_ZRAM_MULTI_COMP) && defined(CONFIG_ZRAM_BACKEND_ZSTD)
+	comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
+#endif
 
 	/* Actual capacity set using sysfs (/sys/block/zram<id>/disksize */
 	set_capacity(zram->disk, 0);

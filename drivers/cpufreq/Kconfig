@@ -131,6 +131,17 @@ config CPU_FREQ_DEFAULT_GOV_VORPAL
 	  with dual-profile support. The fallback governor will be
 	  'performance'.
 
+config CPU_FREQ_DEFAULT_GOV_SCHEDHORIZON
+	bool "schedhorizon"
+	depends on SMP
+	select CPU_FREQ_GOV_SCHEDHORIZON
+	select CPU_FREQ_GOV_PERFORMANCE
+	help
+	  Use the 'schedhorizon' CPUFreq governor by default. Schedhorizon
+	  is an efficiency-optimized governor derived from schedutil,
+	  featuring efficient frequency stepping and up-delay gating.
+	  The fallback governor will be 'performance'.
+
 endchoice
 
 config CPU_FREQ_GOV_PERFORMANCE
@@ -250,6 +261,21 @@ config CPU_FREQ_GOV_VORPAL
 	  Vorpal CPUFreq Governor v2.2-1.
 	  Schedutil-derived governor with dual-profile gaming/daily modes,
 	  tri-cluster awareness, frame-risk detection and thermal integration.
+	  If in doubt, say Y.
+
+config CPU_FREQ_GOV_SCHEDHORIZON
+	bool "'schedhorizon' cpufreq policy governor"
+	default y
+	depends on CPU_FREQ && SMP
+	select CPU_FREQ_GOV_ATTR_SET
+	select IRQ_WORK
+	help
+	  'schedhorizon' is an efficiency-oriented CPU frequency governor
+	  derived from schedutil by xzr (libxzr). It introduces configurable
+	  efficient frequency steps and up-delay hold times to reduce
+	  needless frequency spikes from short transient bursts while
+	  maintaining full performance under sustained load.
+
 	  If in doubt, say Y.
 
 config CPU_FREQ_GOV_INTERACTIVE

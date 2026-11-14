@@ -32,6 +32,13 @@
     - LZ4 homepage : http://www.lz4.org
     - LZ4 source repository : https://github.com/lz4/lz4
 */
+#if defined (__cplusplus)
+extern "C" {
+#endif
+
+#ifndef LZ4_H_2983827168210
+#define LZ4_H_2983827168210
+
 #include <linux/compiler.h>
 #include <linux/export.h>
 #include <linux/string.h>
@@ -39,13 +46,6 @@
 #include "lz4armv8/lz4accel.h"
 
 #define LZ4_FORCE_INLINE static inline __attribute__((always_inline))
-
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
-#ifndef LZ4_H_2983827168210
-#define LZ4_H_2983827168210
 
 
 /**

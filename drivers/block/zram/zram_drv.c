@@ -1184,6 +1184,17 @@ static int __comp_algorithm_store(struct zram *zram, u32 prio, const char *buf)
 	if (!alg)
 		return -EINVAL;
 
+#ifdef CONFIG_ZRAM_DEF_COMP_LZ4KDR
+	/*
+	 * Android vendor init scripts (e.g. init.target.rc) hardcode
+	 * 'write /sys/block/zram0/comp_algorithm lz4'.
+	 * If LZ4KDR is selected as the default compressor in kernel config,
+	 * transparently alias 'lz4' to 'lz4kdr'.
+	 */
+	if (prio == ZRAM_PRIMARY_COMP && !strcmp(alg, "lz4"))
+		alg = "lz4kdr";
+#endif
+
 	down_write(&zram->init_lock);
 	if (init_done(zram)) {
 		up_write(&zram->init_lock);

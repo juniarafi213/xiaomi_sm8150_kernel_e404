@@ -2445,6 +2445,9 @@ static void zram_reset_device(struct zram *zram)
 	reset_bdev(zram);
 
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
+#if defined(CONFIG_ZRAM_MULTI_COMP) && defined(CONFIG_ZRAM_BACKEND_ZSTD)
+	comp_algorithm_set(zram, ZRAM_SECONDARY_COMP, "zstd");
+#endif
 	up_write(&zram->init_lock);
 }
 

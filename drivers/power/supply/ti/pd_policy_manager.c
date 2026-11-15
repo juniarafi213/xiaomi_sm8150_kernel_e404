@@ -903,7 +903,12 @@ static int usbpd_pm_fc2_charge_algo(struct usbpd_pm *pdpm)
 				pdpm->cp.charge_enabled, pdpm->cp_sec.charge_enabled);
 		zero_ibus_count = 0;
 		return PM_ALGO_RET_CHG_DISABLED;
-	} else if (ibus_total < 200) {
+	} else if (pdpm->sw.slowly_charging) {
+		pr_info("slowly charging enabled[%d]\n", pdpm->sw.slowly_charging);
+		return PM_ALGO_RET_SLOWLY_CHARGING;
+	}
+
+	if (ibus_total < 200) {
 		if (++zero_ibus_count > 6) {
 			pr_err("Charge pump active but ibus is under 200mA for 3s! Fallback to switching charger\n");
 			zero_ibus_count = 0;
@@ -911,9 +916,6 @@ static int usbpd_pm_fc2_charge_algo(struct usbpd_pm *pdpm)
 		}
 	} else {
 		zero_ibus_count = 0;
-	} else if (pdpm->sw.slowly_charging) {
-		pr_info("slowly charging enabled[%d]\n", pdpm->sw.slowly_charging);
-		return PM_ALGO_RET_SLOWLY_CHARGING;
 	}
 
 	/*check overcharge when it is cool*/

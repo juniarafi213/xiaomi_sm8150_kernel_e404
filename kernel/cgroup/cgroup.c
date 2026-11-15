@@ -6045,6 +6045,13 @@ static int __init cgroup_disable(char *str)
 		for (i = 0; i < OPT_FEATURE_COUNT; i++) {
 			if (strcmp(token, cgroup_opt_feature_names[i]))
 				continue;
+#ifdef CONFIG_PSI
+			if (i == OPT_FEATURE_PRESSURE) {
+				pr_info("Ignoring disable request for %s control group feature\n",
+					cgroup_opt_feature_names[i]);
+				break;
+			}
+#endif
 			cgroup_feature_disable_mask |= 1 << i;
 			pr_info("Disabling %s control group feature\n",
 				cgroup_opt_feature_names[i]);

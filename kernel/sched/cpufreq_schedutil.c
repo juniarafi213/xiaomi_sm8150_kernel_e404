@@ -13,6 +13,20 @@
 #include "sched.h"
 
 #define IOWAIT_BOOST_MIN	(SCHED_CAPACITY_SCALE / 8)
+#define SUGOV_DVFS_HEADROOM_FACTOR_LITTLE	1280
+#define SUGOV_DVFS_HEADROOM_FACTOR_MID		1228
+#define SUGOV_DVFS_HEADROOM_FACTOR_PRIME	1126
+
+static inline unsigned int sugov_dvfs_headroom_factor(unsigned int cpu)
+{
+	if (cpu <= 3)
+		return SUGOV_DVFS_HEADROOM_FACTOR_LITTLE;
+
+	if (cpu == 7)
+		return SUGOV_DVFS_HEADROOM_FACTOR_PRIME;
+
+	return SUGOV_DVFS_HEADROOM_FACTOR_MID;
+}
 
 DEFINE_PER_CPU_READ_MOSTLY(unsigned long, response_time_mult);
 struct sugov_tunables {
@@ -382,8 +396,13 @@ static inline unsigned long sugov_apply_dvfs_headroom(unsigned long util, int cp
 	growth = mult_frac(h_max, cap, SCHED_CAPACITY_SCALE);
 	decay = h_max + util - approx;
 
-	if (growth > decay)
-		return util + growth - decay;
+	if (growth > decay) {
+		unsigned long headroom = growth - decay;
+
+		headroom = (headroom * sugov_dvfs_headroom_factor(cpu)) >>
+			   SCHED_CAPACITY_SHIFT;
+		return util + headroom;
+	}
 
 	return util;
 }

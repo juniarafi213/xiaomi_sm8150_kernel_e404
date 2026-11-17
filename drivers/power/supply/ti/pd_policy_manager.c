@@ -781,6 +781,7 @@ static int usbpd_pm_fc2_charge_algo(struct usbpd_pm *pdpm)
 	static int curr_fcc_limit, curr_ibus_limit;
 
 	static int ibus_limit;
+	static int zero_ibus_count = 0;
 
 	//usbpd_set_new_fcc_voter(pdpm);
 
@@ -900,10 +901,21 @@ static int usbpd_pm_fc2_charge_algo(struct usbpd_pm *pdpm)
 			|| (pm_config.cp_sec_enable && !pdpm->cp_sec.charge_enabled)) {
 		pr_info("cp.charge_enabled:%d, cp_sec.charge_enabled:%d\n",
 				pdpm->cp.charge_enabled, pdpm->cp_sec.charge_enabled);
+		zero_ibus_count = 0;
 		return PM_ALGO_RET_CHG_DISABLED;
 	} else if (pdpm->sw.slowly_charging) {
 		pr_info("slowly charging enabled[%d]\n", pdpm->sw.slowly_charging);
 		return PM_ALGO_RET_SLOWLY_CHARGING;
+	}
+
+	if (ibus_total < 200) {
+		if (++zero_ibus_count > 6) {
+			pr_err("Charge pump active but ibus is under 200mA for 3s! Fallback to switching charger\n");
+			zero_ibus_count = 0;
+			return PM_ALGO_RET_CHG_DISABLED;
+		}
+	} else {
+		zero_ibus_count = 0;
 	}
 
 	/*check overcharge when it is cool*/
@@ -1040,7 +1052,7 @@ static int usbpd_pm_sm(struct usbpd_pm *pdpm)
 
 	case PD_PM_STATE_FC2_ENTRY_1:
 		pdpm->request_voltage = pdpm->cp.vbat_volt * 2 + BUS_VOLT_INIT_UP;
-		pdpm->request_current = min(pdpm->apdo_max_curr, curr_ibus_lmt);
+		pdpm->request_current = pdpm->apdo_max_curr;
 
 		usbpd_select_pdo(pdpm->pd, pdpm->apdo_selected_pdo,
 				pdpm->request_voltage * 1000, pdpm->request_current * 1000);
@@ -1101,7 +1113,7 @@ static int usbpd_pm_sm(struct usbpd_pm *pdpm)
 
 		if (pdpm->cp.charge_enabled) {
 			if (pm_config.fc2_disable_sw) {
-				if (pdpm->sw.charge_enabled) {
+				if (pdpm->sw.charge_enabled && pdpm->cp.ibus_curr > 500) {
 					usbpd_pm_enable_sw(pdpm, false);
 					usbpd_pm_update_sw_status(pdpm);
 				}
@@ -1123,6 +1135,11 @@ static int usbpd_pm_sm(struct usbpd_pm *pdpm)
 		}
 #endif
 		usbpd_update_pps_status(pdpm);
+
+		if (pm_config.fc2_disable_sw && pdpm->sw.charge_enabled && pdpm->cp.ibus_curr > 500) {
+			usbpd_pm_enable_sw(pdpm, false);
+			usbpd_pm_update_sw_status(pdpm);
+		}
 
 		ret = usbpd_pm_fc2_charge_algo(pdpm);
 		if (ret == PM_ALGO_RET_THERM_FAULT) {
@@ -1272,7 +1289,7 @@ static void usbpd_pps_non_verified_contact(struct usbpd_pm *pdpm, bool connected
 	if (connected) {
 		usbpd_pm_evaluate_src_caps(pdpm);
 		if (pdpm->pps_supported)
-			queue_delayed_work(system_power_efficient_wq, &pdpm->pm_work, 5*HZ);
+			queue_delayed_work(system_power_efficient_wq, &pdpm->pm_work, 0);
 	} else {
 		usbpd_pm_disconnect(pdpm);
 	}

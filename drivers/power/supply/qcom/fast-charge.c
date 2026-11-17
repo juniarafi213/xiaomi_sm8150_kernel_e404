@@ -15,6 +15,8 @@
 #define FAST_CHARGE_VOTER		"FAST_CHARGE_VOTER"
 #define THERMAL_DAEMON_VOTER		"THERMAL_DAEMON_VOTER"
 #define RESTRICT_CHG_VOTER		"RESTRICT_CHG_VOTER"
+#define PD_VERIFED_VOTER		"PD_VERIFED_VOTER"
+#define BATT_PROFILE_VOTER		"BATT_PROFILE_VOTER"
 
 #define FAST_CHARGE_ICL_UA		6000000
 #define FAST_CHARGE_FCC_UA		6000000
@@ -41,6 +43,8 @@ static void fast_charge_apply(bool enable)
 			     FAST_CHARGE_FCC_UA);
 			vote(fcc_votable, THERMAL_DAEMON_VOTER, false, 0);
 			vote(fcc_votable, RESTRICT_CHG_VOTER, false, 0);
+			vote(fcc_votable, PD_VERIFED_VOTER, false, 0);
+			vote(fcc_votable, BATT_PROFILE_VOTER, false, 0);
 		}
 		if (usb_icl_votable)
 			vote(usb_icl_votable, FAST_CHARGE_VOTER, true,
@@ -48,8 +52,11 @@ static void fast_charge_apply(bool enable)
 
 		pr_info("fast_charge: enabled — FCC/ICL set to 6A\n");
 	} else {
-		if (fcc_votable)
+		if (fcc_votable) {
 			vote(fcc_votable, FAST_CHARGE_VOTER, false, 0);
+			vote(fcc_votable, PD_VERIFED_VOTER, true, 4800000);
+			vote(fcc_votable, BATT_PROFILE_VOTER, true, 5050000);
+		}
 		if (usb_icl_votable)
 			vote(usb_icl_votable, FAST_CHARGE_VOTER, false, 0);
 

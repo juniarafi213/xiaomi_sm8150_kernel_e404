@@ -7,6 +7,14 @@
 #include "../../lib/lz4/lz4.h"
 #include "../../lib/lz4/lz4hc.h"
 
+#ifndef LZ4_ACCELERATION_DEFAULT
+#define LZ4_ACCELERATION_DEFAULT 1
+#endif
+
+#ifndef LZ4_ACCELERATION_MAX
+#define LZ4_ACCELERATION_MAX 65537
+#endif
+
 #define LZ4_MEM_COMPRESS	LZ4_STREAM_MINSIZE
 #define LZ4HC_MEM_COMPRESS	LZ4_STREAMHC_MINSIZE
 

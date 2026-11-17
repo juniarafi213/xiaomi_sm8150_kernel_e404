@@ -1,3 +1,6 @@
+#ifndef __LZ4ACCEL_H__
+#define __LZ4ACCEL_H__
+
 #include <linux/types.h>
 #include <asm/simd.h>
 
@@ -54,3 +57,5 @@ static inline ssize_t lz4_decompress_asm(
 	return 0;
 }
 #endif
+
+#endif /* __LZ4ACCEL_H__ */

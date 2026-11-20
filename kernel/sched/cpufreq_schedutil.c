@@ -951,7 +951,7 @@ static int sugov_init(struct cpufreq_policy *policy)
 	sg_policy->tunables = tunables;
 
 	tunables->rate_limit_us = 2000;
-	tunables->response_time_ms = sugov_calc_freq_response_ms(sg_policy);
+	tunables->response_time_ms = max_t(unsigned int, 18, sugov_calc_freq_response_ms(sg_policy));
 	sugov_update_response_time_mult(sg_policy);
 	sugov_build_dvfs_headroom_lut(sg_policy);
 

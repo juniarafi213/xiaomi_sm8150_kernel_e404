@@ -108,7 +108,7 @@ if [[ "$*" == *gcc* ]]; then
     )
 else
     declare -A DEVICE_MAP=(
-        ["vayu"]="VAYU:vayu_defconfig"
+            ["vayu"]="VAYU:vayu-hyperos_defconfig"
         ["vaybpf"]="VAYBPF:vayu-bpf_defconfig"
     )
 fi

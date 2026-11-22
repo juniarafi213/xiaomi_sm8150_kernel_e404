@@ -673,19 +673,15 @@ static void update_history(struct cpuidle_device *dev, int idx);
 
 static inline bool is_cpu_biased(int cpu, uint64_t *bias_time)
 {
-	u64 now = sched_clock();
-	u64 last = sched_get_cpu_last_busy_time(cpu);
-	u64 diff = 0;
-
-	if (!last)
-		return false;
-
-	diff = now - last;
-	if (diff < BIAS_HYST) {
-		*bias_time = BIAS_HYST - diff;
-		return true;
-	}
-
+	/*
+	 * This tree does not provide sched_get_cpu_last_busy_time() (the WALT
+	 * sched_avg.c helper).  The bias heuristic only keeps a CPU in a
+	 * shallower state for a short while after a busy period; it is a
+	 * performance optimisation, not a correctness requirement, so disable
+	 * it here.
+	 */
+	(void)cpu;
+	(void)bias_time;
 	return false;
 }
 

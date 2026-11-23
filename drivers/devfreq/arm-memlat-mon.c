@@ -614,7 +614,8 @@ static struct device_node *parse_child_nodes(struct device *dev)
 	return NULL;
 }
 
-#define DEFAULT_UPDATE_MS 100
+/* Match the 50 ms floor enforced by the memlat governor. */
+#define DEFAULT_UPDATE_MS 50
 static int memlat_cpu_grp_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;

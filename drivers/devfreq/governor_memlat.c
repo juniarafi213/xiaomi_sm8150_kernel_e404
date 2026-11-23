@@ -362,8 +362,27 @@ static struct attribute_group compute_dev_attr_group = {
 	.attrs = compute_dev_attr,
 };
 
-#define MIN_MS	0U
-#define MAX_MS	500U
+#define MIN_MS		0U
+#define MAX_MS		500U
+#define MIN_POLL_MS	50U
+
+/*
+ * Reading memlat perf events on remote CPUs uses function-call IPIs.
+ * Enforce a 50 ms floor so userspace cannot drop the polling interval
+ * back to 10 ms and flood idle CPUs with IPIs (which also keeps them
+ * out of deeper cpuidle states).  A zero interval still stops polling.
+ */
+static unsigned int memlat_clamp_sample_ms(unsigned int sample_ms)
+{
+	sample_ms = max(MIN_MS, sample_ms);
+	sample_ms = min(MAX_MS, sample_ms);
+
+	if (sample_ms)
+		sample_ms = max(MIN_POLL_MS, sample_ms);
+
+	return sample_ms;
+}
+
 static int devfreq_memlat_ev_handler(struct devfreq *df,
 					unsigned int event, void *data)
 {
@@ -374,9 +393,7 @@ static int devfreq_memlat_ev_handler(struct devfreq *df,
 
 	switch (event) {
 	case DEVFREQ_GOV_START:
-		sample_ms = df->profile->polling_ms;
-		sample_ms = max(MIN_MS, sample_ms);
-		sample_ms = min(MAX_MS, sample_ms);
+		sample_ms = memlat_clamp_sample_ms(df->profile->polling_ms);
 		df->profile->polling_ms = sample_ms;
 
 		ret = gov_start(df);
@@ -420,9 +437,7 @@ static int devfreq_memlat_ev_handler(struct devfreq *df,
 	case DEVFREQ_GOV_INTERVAL:
 		node = df->data;
 		hw = node->hw;
-		sample_ms = *(unsigned int *)data;
-		sample_ms = max(MIN_MS, sample_ms);
-		sample_ms = min(MAX_MS, sample_ms);
+		sample_ms = memlat_clamp_sample_ms(*(unsigned int *)data);
 		if (hw->request_update_ms)
 			hw->request_update_ms(hw, sample_ms);
 		if (!hw->should_ignore_df_monitor)

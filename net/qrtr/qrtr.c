@@ -841,7 +841,11 @@ int qrtr_endpoint_post(struct qrtr_endpoint *ep, const void *data, size_t len)
 	    cb->type != QRTR_TYPE_RESUME_TX)
 		goto err;
 
-	__pm_wakeup_event(node->ws, 0);
+	/*
+	 * No __pm_wakeup_event() here: with msec == 0 it only bumps
+	 * combined_event_count before deactivating, so pm_wakeup_pending()
+	 * trips during try_to_freeze_tasks() for every modem QMI packet.
+	 */
 
 	skb->data_len = size;
 	skb->len = size;

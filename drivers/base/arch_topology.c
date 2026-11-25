@@ -368,7 +368,8 @@ bool __init topology_parse_cpu_capacity(struct device_node *cpu_node, int cpu)
 			per_cpu(freq_factor, cpu) =
 				clk_get_rate(cpu_clk) / 1000;
 
-		clk_put(cpu_clk);
+		if (!IS_ERR(cpu_clk))
+			clk_put(cpu_clk);
 	} else {
 		if (raw_capacity) {
 			pr_err("cpu_capacity: missing %pOF raw capacity\n",

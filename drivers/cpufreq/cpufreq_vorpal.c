@@ -2466,10 +2466,23 @@ static void __init rfx_selfcheck(void)
 	 * Cap is two frame gaps (RFX_EMA_MAX_STEPS periods), so a 120fps
 	 * inter-frame gap steps out within the cap and a longer gap lands
 	 * on the discard. */
-	ns = t - ((u64)(RFX_EMA_MAX_STEPS + 1) * RFX_EMA_DECAY_PERIOD_NS);
-	WARN_ON(rfx_ema(1000, 0, t, &ns, true) !=
-		1000 - RFX_EMA_MAX_STEPS * 1000 / RFX_EMA_GAMING_DIVISOR ||
-		ns != t);
+	{
+		/*
+		 * Decay is multiplicative (each period removes 1/DIVISOR of
+		 * the remaining error), so the expected result is not the
+		 * linear 1000 - steps*1000/DIVISOR. Only the bounds hold: the
+		 * cap of MAX_STEPS is fully applied (at least one bit of
+		 * error left), and the reference jumped to @time.
+		 */
+		unsigned long got;
+
+		ns = t - ((u64)(RFX_EMA_MAX_STEPS + 1) *
+			  RFX_EMA_DECAY_PERIOD_NS);
+		got = rfx_ema(1000, 0, t, &ns, true);
+		WARN_ON(got < 1000 - RFX_EMA_MAX_STEPS * 1000 /
+			       RFX_EMA_GAMING_DIVISOR ||
+			got > 1000 - RFX_EMA_MAX_STEPS || ns != t);
+	}
 
 	/* Gaming headroom ramp: nothing at the gate, something above it (a ramp
 	 * truncated to whole percent would give zero there), never past
@@ -2661,7 +2674,8 @@ static void __init rfx_selfcheck(void)
 	 * re-arm and the full one does. */
 	memset(&p, 0, sizeof(p));
 	rfx_warmup_rearm_quiet(&p, RFX_GAMING_WARMUP_TRIGGER_PCT - 1, t);
-	WARN_ON(p.gaming_warmup_pending != true);
+	/* First quiet sample only stamps the run; it cannot arm. */
+	WARN_ON(p.gaming_warmup_pending || p.quiet_since_ns != t);
 	p.gaming_warmup_pending = false;
 	rfx_warmup_rearm_quiet(&p, RFX_GAMING_WARMUP_TRIGGER_PCT - 1, t);
 	/* Just under the quiet-run threshold: does not re-arm. */

@@ -39,6 +39,9 @@
 #ifdef CONFIG_THERMAL
 #include <linux/thermal.h>
 #endif
+#ifdef CONFIG_E404_ATTRIBUTES
+#include <linux/e404_attributes.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/vorpal.h>
@@ -119,44 +122,36 @@ extern int rfx_setattr_sugov_gki510(struct task_struct *t);
 #define RFX_G_DOWN_FAST_MS_DEFAULT		80	/* F6 fast-phase length */
 #define RFX_G_ENERGY_AWARE_DEFAULT		1	/* F4 round-down on descent */
 
-/* ---- Daily shaping, percent of effective ceiling. Caps only: the util EMA
- * plus PELT already carry any rise. ---- */
-/* Little daily cap (compositor + IME). 60% keeps swipe/notification latency
- * down; a tighter cap made control-center pulls hitch on the Little tier. */
-#define RFX_D_LITTLE_CAP_PCT		60
-/* Little knee floor -- a TIMED window on the wake edge, not a standing floor,
- * to carry the cold OPP climb past its transition hitch. Only Little, daily. */
-#define RFX_D_LITTLE_FLOOR_PCT		32
+/* ---- Daily shaping, percent of effective ceiling. Calibrated separately for
+ * vayu dtb_def (1804.8/2419.2/2956.8 MHz) and dtb_effcpu (1708.8/2246.4/2553.6
+ * MHz) so both DTBO modes land on matching physical OPP tiers (~1171/1344/1517
+ * Little, ~1574/1935 Big, ~1835/2247 Prime MHz) with Little floor above fmin. */
+#define RFX_D_DEF_LITTLE_CAP_PCT		75	/* ~1354 MHz -> 1344 OPP */
+#define RFX_D_DEF_LITTLE_SUSTAINED_CAP_PCT	85	/* ~1534 MHz -> 1517 OPP */
+#define RFX_D_DEF_LITTLE_FLOOR_PCT		66	/* ~1191 MHz -> 1171 OPP (fmin 48.9%) */
+#define RFX_D_DEF_BIG_CAP_PCT			66	/* ~1597 MHz -> 1574 OPP */
+#define RFX_D_DEF_BIG_SUSTAINED_CAP_PCT		80	/* ~1935 MHz */
+#define RFX_D_DEF_PRIME_CAP_PCT			62	/* ~1833 MHz */
+#define RFX_D_DEF_PRIME_SUSTAINED_CAP_PCT	76	/* ~2247 MHz */
+#define RFX_D_DEF_ENERGY_AWARE_MIN_PCT		50
+
+#define RFX_D_EFF_LITTLE_CAP_PCT		80	/* ~1367 MHz -> 1344 OPP */
+#define RFX_D_EFF_LITTLE_SUSTAINED_CAP_PCT	90	/* ~1538 MHz */
+#define RFX_D_EFF_LITTLE_FLOOR_PCT		70	/* ~1196 MHz -> 1171 OPP (fmin 51.7%) */
+#define RFX_D_EFF_BIG_CAP_PCT			72	/* ~1617 MHz -> 1574 OPP */
+#define RFX_D_EFF_BIG_SUSTAINED_CAP_PCT		86	/* ~1932 MHz */
+#define RFX_D_EFF_PRIME_CAP_PCT			72	/* ~1839 MHz */
+#define RFX_D_EFF_PRIME_SUSTAINED_CAP_PCT	88	/* ~2247 MHz -> 2265 OPP */
+#define RFX_D_EFF_ENERGY_AWARE_MIN_PCT		55
+
+/* Little wake-edge knee floor window and shared lift/drop hystereses. */
 #define RFX_D_LITTLE_FLOOR_ARM_PCT	15	/* arm on demand crossing up */
 #define RFX_D_LITTLE_FLOOR_REARM_PCT	6	/* re-arm only after parking (hysteresis) */
 #define RFX_D_LITTLE_FLOOR_NS		(80 * NSEC_PER_MSEC)	/* window length */
-/* Sustained caps: long foreground work at lower voltage, above the lift gate so
- * the latch cannot flap. Latches skewed 1.25x (on ~60% real, off ~46%).
- * Little sustained 62% (was 66%): on QC with the RT uclamp floor plus the 25%
- * DVFS margin, screen-on idle Little demand rests ~35-45% skewed, so the 66%
- * cap sat one OPP above the load all day; 62% trims the resting draw while
- * the 62/48 lift/drop skew still carries compositor/IME work. */
-#define RFX_D_LITTLE_SUSTAINED_CAP_PCT	62
 #define RFX_D_LITTLE_LIFT_PCT		62
 #define RFX_D_LITTLE_DROP_PCT		48
-/* Big/Prime daily caps + shared sustained latch. Base 56% trims the
- * standing idle-tier draw; the latch lifts under sustained demand so
- * bursts (app launch, scroll) finish without chasing fmax.
- *
- * On Qualcomm 120Hz, RT util from SurfaceFlinger/vsync kthreads rides
- * near-constantly in cpu_util_rt(), inflating the demand_pct baseline by
- * ~$5-8 (of 100). The 25% DVFS headroom then pushes sustained util into
- * the 48-62 band, so the 68% sustained cap flaps on near-idle load.
- * Dropping the latch to 62% caps the max fceil commit at ~3.8 GHz
- * (vs 4.0 GHz at 68%) on a 2.1 GHz base / 4 GHz turbo prime, saving
- * ~$28 mW/CPU under RT bias while keeping burst headroom for real
- * foreground work. Lift/drop skew preserved: on ~51% real, off ~42%. */
-#define RFX_D_BIG_CAP_PCT		56
-#define RFX_D_PRIME_CAP_PCT		56
 #define RFX_D_BIG_LIFT_PCT		62
 #define RFX_D_BIG_DROP_PCT		46
-#define RFX_D_BIG_SUSTAINED_CAP_PCT	62
-#define RFX_D_PRIME_SUSTAINED_CAP_PCT	62
 
 /* ---- Daily-only power features: applied while gaming_mode=0, inert while
  * gaming (the gaming band never reads them). Any 0 disables at build. ---- */
@@ -164,32 +159,20 @@ extern int rfx_setattr_sugov_gki510(struct task_struct *t);
  * 35000us = 35ms reduces eval overhead during idle, saving power. */
 #define RFX_D_IDLE_EVAL_US		35000
 /* Light-load eval: below this committed OPP the cadence stretches toward
- * RFX_D_IDLE_EVAL_US. Eval+commit traffic at light load was the measured
- * daily drain, so the stretch stays; its floor drops to 15ms instead of the
- * parked 35ms. The 3ms<->35ms step at 25% OPP let a burst sit up to 4
- * frames @120Hz whenever the clock stood just under the boundary; a 15ms
- * light cadence caps that at ~2 frames while parked fmin keeps the full
- * 35ms, so the idle savings are intact. The stretch targets eval-only
- * traffic: commits are what burn the drain, and the light path never adds
- * one (upcommits still pay the normal tunable rate). */
+ * RFX_D_IDLE_EVAL_US. */
 #define RFX_D_LIGHT_EVAL_OPP_PCT	25
 #define RFX_D_LIGHT_EVAL_US		15000
 /* F5 daily: min dwell since the last up-commit before a drop (anti down-flap). */
 #define RFX_D_LITTLE_MIN_SAMPLE_US	4000
 #define RFX_D_BIG_MIN_SAMPLE_US		2000
-/* F4 daily: round down on descent above MIN_PCT (rises still round up, so the
- * fmin park stays fast). 25 (was 30): wider round-down band shaves more
- * voltage across the low-mid range -- the standing all-day drain. Daily only. */
+/* F4 daily: round down on descent above mode's ea_min_pct. */
 #define RFX_D_ENERGY_AWARE		1
-#define RFX_D_ENERGY_AWARE_MIN_PCT	25
-/* Daily thermal pre-cap: slide fceil -> MIN_PCT across START..FULL_MC (warmth).
- * 38 mC = 38C sits at the bottom of the natural 40C browse/IG plateau, so the
- * pre-cap is active across the whole plateau: the closer the die gets to
- * FULL (44C) the more voltage is shed. 38000 kept: it relieves a hot die
- * while the vendor HAL / thermal_pressure are the real controllers. */
-#define RFX_D_THERM_CAP_MC		38000
-#define RFX_D_THERM_CAP_FULL_MC		44000
-#define RFX_D_THERM_CAP_MIN_PCT		55
+/* Default SM8150 CPU die zone ("cpuss-1-usr", Gold/Prime subsystem); idle runs
+ * ~45-57C, so daily thermal pre-cap starts at 65C and ramps to 70% by 80C. */
+#define RFX_DEFAULT_THERMAL_ZONE	"cpuss-1-usr"
+#define RFX_D_THERM_CAP_MC		65000
+#define RFX_D_THERM_CAP_FULL_MC		80000
+#define RFX_D_THERM_CAP_MIN_PCT		70
 /* Park latch: enter fmin below ~3% (max_cap>>5), hold until EXIT_PCT for EXIT_EVALS.
  * 16%/1 eval: 12% held a parked cluster through light bursts -- the cold-climb
  * hitch of the first frame after a lull. At 16% a parked cluster releases in
@@ -942,6 +925,48 @@ static unsigned int rfx_thermal_clamp(unsigned int freq, unsigned int fceil)
 	return min(freq, rfx_pct(fceil, pct));
 }
 
+struct rfx_daily_profile {
+	unsigned int little_cap_pct;
+	unsigned int little_sustained_cap_pct;
+	unsigned int little_floor_pct;
+	unsigned int big_cap_pct;
+	unsigned int big_sustained_cap_pct;
+	unsigned int prime_cap_pct;
+	unsigned int prime_sustained_cap_pct;
+	unsigned int ea_min_pct;
+};
+
+static const struct rfx_daily_profile rfx_daily_def = {
+	.little_cap_pct			= RFX_D_DEF_LITTLE_CAP_PCT,
+	.little_sustained_cap_pct	= RFX_D_DEF_LITTLE_SUSTAINED_CAP_PCT,
+	.little_floor_pct		= RFX_D_DEF_LITTLE_FLOOR_PCT,
+	.big_cap_pct			= RFX_D_DEF_BIG_CAP_PCT,
+	.big_sustained_cap_pct		= RFX_D_DEF_BIG_SUSTAINED_CAP_PCT,
+	.prime_cap_pct			= RFX_D_DEF_PRIME_CAP_PCT,
+	.prime_sustained_cap_pct	= RFX_D_DEF_PRIME_SUSTAINED_CAP_PCT,
+	.ea_min_pct			= RFX_D_DEF_ENERGY_AWARE_MIN_PCT,
+};
+
+static const struct rfx_daily_profile rfx_daily_eff = {
+	.little_cap_pct			= RFX_D_EFF_LITTLE_CAP_PCT,
+	.little_sustained_cap_pct	= RFX_D_EFF_LITTLE_SUSTAINED_CAP_PCT,
+	.little_floor_pct		= RFX_D_EFF_LITTLE_FLOOR_PCT,
+	.big_cap_pct			= RFX_D_EFF_BIG_CAP_PCT,
+	.big_sustained_cap_pct		= RFX_D_EFF_BIG_SUSTAINED_CAP_PCT,
+	.prime_cap_pct			= RFX_D_EFF_PRIME_CAP_PCT,
+	.prime_sustained_cap_pct	= RFX_D_EFF_PRIME_SUSTAINED_CAP_PCT,
+	.ea_min_pct			= RFX_D_EFF_ENERGY_AWARE_MIN_PCT,
+};
+
+static inline const struct rfx_daily_profile *rfx_daily_prof(void)
+{
+#ifdef CONFIG_E404_ATTRIBUTES
+	if (e404_data.effcpu)
+		return &rfx_daily_eff;
+#endif
+	return &rfx_daily_def;
+}
+
 /*
  * Daily thermal pre-cap: fceil at/below START_MC, MIN_PCT at/above FULL_MC,
  * linear between. Returns fceil when disabled or cool.
@@ -1304,6 +1329,7 @@ static unsigned int rfx_target_freq(struct rfx_policy *p, unsigned long util,
 				freq = boost_fl;
 		}
 	} else {
+		const struct rfx_daily_profile *dp = rfx_daily_prof();
 		unsigned int cap, demand_pct;
 
 		/* Raw demand, before headroom: post-headroom util is stepped by
@@ -1315,7 +1341,7 @@ static unsigned int rfx_target_freq(struct rfx_policy *p, unsigned long util,
 		/* One cap per tier, one demand latch to lift it. No floors:
 		 * demand plus the EMA already hold the clock where the work is. */
 		if (little) {
-			cap = rfx_pct(fceil, RFX_D_LITTLE_CAP_PCT);
+			cap = rfx_pct(fceil, dp->little_cap_pct);
 
 			if (demand_pct >= RFX_D_LITTLE_LIFT_PCT)
 				p->little_cap_lifted = true;
@@ -1323,7 +1349,7 @@ static unsigned int rfx_target_freq(struct rfx_policy *p, unsigned long util,
 				p->little_cap_lifted = false;
 			if (p->little_cap_lifted)
 				cap = rfx_pct(fceil,
-					      RFX_D_LITTLE_SUSTAINED_CAP_PCT);
+					      dp->little_sustained_cap_pct);
 
 			/* Timed knee floor: arm a short window on the rising
 			 * demand edge (idle -> interaction) so the wake carries the
@@ -1336,11 +1362,11 @@ static unsigned int rfx_target_freq(struct rfx_policy *p, unsigned long util,
 			p->little_prev_demand = demand_pct;
 
 			if (p->little_floor_end_ns && time < p->little_floor_end_ns &&
-			    freq < rfx_pct(fceil, RFX_D_LITTLE_FLOOR_PCT))
-				freq = rfx_pct(fceil, RFX_D_LITTLE_FLOOR_PCT);
+			    freq < rfx_pct(fceil, dp->little_floor_pct))
+				freq = rfx_pct(fceil, dp->little_floor_pct);
 		} else {
-			cap = rfx_pct(fceil, prime ? RFX_D_PRIME_CAP_PCT :
-						     RFX_D_BIG_CAP_PCT);
+			cap = rfx_pct(fceil, prime ? dp->prime_cap_pct :
+						     dp->big_cap_pct);
 
 			/* Big/Prime share one latch. */
 			if (demand_pct >= RFX_D_BIG_LIFT_PCT)
@@ -1349,8 +1375,8 @@ static unsigned int rfx_target_freq(struct rfx_policy *p, unsigned long util,
 				p->big_cap_lifted = false;
 			if (p->big_cap_lifted)
 				cap = rfx_pct(fceil, prime ?
-					RFX_D_PRIME_SUSTAINED_CAP_PCT :
-					RFX_D_BIG_SUSTAINED_CAP_PCT);
+					dp->prime_sustained_cap_pct :
+					dp->big_sustained_cap_pct);
 		}
 
 		/* Daily thermal pre-cap (warmth / battery). */
@@ -1385,7 +1411,7 @@ static unsigned int rfx_target_freq(struct rfx_policy *p, unsigned long util,
 			round_down = RFX_G_ENERGY_AWARE_DEFAULT;
 		else
 			round_down = RFX_D_ENERGY_AWARE &&
-				freq >= rfx_pct(fceil, RFX_D_ENERGY_AWARE_MIN_PCT);
+				freq >= rfx_pct(fceil, rfx_daily_prof()->ea_min_pct);
 
 		if (round_down) {
 			int idx = cpufreq_frequency_table_target(pol, freq,
@@ -1768,7 +1794,8 @@ static void rfx_irq_work(struct irq_work *irq_work)
 
 #ifdef CONFIG_THERMAL
 static struct thermal_zone_device *rfx_tz;
-static char rfx_tz_name[THERMAL_NAME_LENGTH];
+static char rfx_tz_name[THERMAL_NAME_LENGTH] = RFX_DEFAULT_THERMAL_ZONE;
+static DEFINE_MUTEX(rfx_tz_lock);
 #endif
 static struct delayed_work rfx_thermal_work;
 
@@ -1780,6 +1807,19 @@ static void rfx_thermal_fn(struct work_struct *w)
 
 #ifdef CONFIG_THERMAL
 	struct thermal_zone_device *tz = READ_ONCE(rfx_tz);
+
+	if (!tz && READ_ONCE(rfx_tz_name[0])) {
+		mutex_lock(&rfx_tz_lock);
+		tz = rfx_tz;
+		if (!tz && rfx_tz_name[0]) {
+			tz = thermal_zone_get_zone_by_name(rfx_tz_name);
+			if (!IS_ERR(tz))
+				WRITE_ONCE(rfx_tz, tz);
+			else
+				tz = NULL;
+		}
+		mutex_unlock(&rfx_tz_lock);
+	}
 
 	if (tz && !thermal_zone_get_temp(tz, &t_mc)) {
 		have = true;
@@ -1812,6 +1852,13 @@ static void rfx_thermal_fn(struct work_struct *w)
 		}
 	} else {
 		atomic_set(&rfx_emergency_cap_pct, 100);
+#ifdef CONFIG_THERMAL
+		/* Keep probing in case thermal zones finish registering after init. */
+		if (READ_ONCE(rfx_tz_name[0]))
+			queue_delayed_work(system_power_efficient_wq,
+					   &rfx_thermal_work,
+					   msecs_to_jiffies(RFX_THERMAL_POLL_IDLE_MS));
+#endif
 		return;
 	}
 
@@ -2012,7 +2059,12 @@ static struct governor_attr temp_mc = __ATTR_RW(temp_mc);
 static ssize_t thermal_zone_show(struct gov_attr_set *attr_set, char *buf)
 {
 #ifdef CONFIG_THERMAL
-	return sprintf(buf, "%s\n", rfx_tz_name[0] ? rfx_tz_name : "(none)");
+	int ret;
+
+	mutex_lock(&rfx_tz_lock);
+	ret = sprintf(buf, "%s\n", rfx_tz_name[0] ? rfx_tz_name : "(none)");
+	mutex_unlock(&rfx_tz_lock);
+	return ret;
 #else
 	return sprintf(buf, "(no CONFIG_THERMAL)\n");
 #endif
@@ -2029,8 +2081,10 @@ static ssize_t thermal_zone_store(struct gov_attr_set *attr_set,
 	tz = thermal_zone_get_zone_by_name(name);
 	if (IS_ERR(tz))
 		return -EINVAL;
-	WRITE_ONCE(rfx_tz, tz);
+	mutex_lock(&rfx_tz_lock);
 	strscpy(rfx_tz_name, name, sizeof(rfx_tz_name));
+	WRITE_ONCE(rfx_tz, tz);
+	mutex_unlock(&rfx_tz_lock);
 	/* Re-arm: the poller stops itself while no source is configured. */
 	mod_delayed_work(system_power_efficient_wq, &rfx_thermal_work, 0);
 	return count;
@@ -2786,18 +2840,26 @@ static int __init vorpal_gov_init(void)
 	BUILD_BUG_ON(RFX_G_WARMUP_FLOOR_PCT > 100);
 	BUILD_BUG_ON(RFX_G_IDLE_FLOOR_PCT > RFX_G_LITTLE_FLOOR_PCT);
 	BUILD_BUG_ON(RFX_G_COOL_STEADY_FLOOR_PCT > RFX_G_BIG_FLOOR_PCT);
-	BUILD_BUG_ON(RFX_D_LITTLE_CAP_PCT > RFX_D_LITTLE_SUSTAINED_CAP_PCT);
-	BUILD_BUG_ON(RFX_D_LITTLE_FLOOR_PCT > RFX_D_LITTLE_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_DEF_LITTLE_CAP_PCT > RFX_D_DEF_LITTLE_SUSTAINED_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_DEF_LITTLE_FLOOR_PCT > RFX_D_DEF_LITTLE_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_EFF_LITTLE_CAP_PCT > RFX_D_EFF_LITTLE_SUSTAINED_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_EFF_LITTLE_FLOOR_PCT > RFX_D_EFF_LITTLE_CAP_PCT);
 	/* Rearm threshold must sit below the arm threshold, or the window arms
 	 * and clears in the same band and can never hold. */
 	BUILD_BUG_ON(RFX_D_LITTLE_FLOOR_REARM_PCT >= RFX_D_LITTLE_FLOOR_ARM_PCT);
-	BUILD_BUG_ON(RFX_D_BIG_CAP_PCT > RFX_D_BIG_SUSTAINED_CAP_PCT);
-	BUILD_BUG_ON(RFX_D_PRIME_CAP_PCT > RFX_D_PRIME_SUSTAINED_CAP_PCT);
-	BUILD_BUG_ON(RFX_D_LITTLE_SUSTAINED_CAP_PCT > 100);
-	BUILD_BUG_ON(RFX_D_BIG_SUSTAINED_CAP_PCT > 100);
-	BUILD_BUG_ON(RFX_D_PRIME_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_DEF_BIG_CAP_PCT > RFX_D_DEF_BIG_SUSTAINED_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_DEF_PRIME_CAP_PCT > RFX_D_DEF_PRIME_SUSTAINED_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_DEF_LITTLE_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_DEF_BIG_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_DEF_PRIME_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_DEF_ENERGY_AWARE_MIN_PCT > 100);
+	BUILD_BUG_ON(RFX_D_EFF_BIG_CAP_PCT > RFX_D_EFF_BIG_SUSTAINED_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_EFF_PRIME_CAP_PCT > RFX_D_EFF_PRIME_SUSTAINED_CAP_PCT);
+	BUILD_BUG_ON(RFX_D_EFF_LITTLE_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_EFF_BIG_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_EFF_PRIME_SUSTAINED_CAP_PCT > 100);
+	BUILD_BUG_ON(RFX_D_EFF_ENERGY_AWARE_MIN_PCT > 100);
 	BUILD_BUG_ON(RFX_D_ENERGY_AWARE > 1);
-	BUILD_BUG_ON(RFX_D_ENERGY_AWARE_MIN_PCT > 100);
 	BUILD_BUG_ON(RFX_D_THERM_CAP_MIN_PCT > 100);
 #if RFX_D_THERM_CAP_MC
 	BUILD_BUG_ON(RFX_D_THERM_CAP_FULL_MC <= RFX_D_THERM_CAP_MC);

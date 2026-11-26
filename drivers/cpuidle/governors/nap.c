@@ -42,7 +42,7 @@
 #include <linux/tick.h>
 #include <linux/time64.h>
 
-#define NAP_VERSION		"0.5.0"
+#define NAP_VERSION		"0.5.1"
 
 #define NAP_INPUT_SIZE		8
 #define NAP_HIDDEN_SIZE		8
@@ -61,6 +61,8 @@
 
 /* Bounds staleness of the cached shallowest-valid-state lookup. */
 #define NAP_MIN_STATE_REFRESH_JIFFIES	HZ
+/* Don't stop the tick if the selected state's residency won't amortize it. */
+#define NAP_RESIDENCY_THRESHOLD_NS	(15 * NSEC_PER_USEC)
 
 /* ================================================================
  * Linux 4.14 compatibility
@@ -687,14 +689,17 @@ static int nap_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	idx = nap_decide(d, drv, dev, latency_req);
 
 	/*
-	 * Don't stop the tick for a polling state or an idle shorter than the
-	 * tick period; if it stays running, keep the target residency within
-	 * the time to the closest timer.
+	 * Stopping the tick saves nothing when the next timer is closer than
+	 * one tick period or when the selected state's target residency sits at
+	 * or below the tick-stop break-even threshold. While the tick stays
+	 * running, clamp target residency to the closest timer.
 	 */
-	if (((drv->states[idx].flags & CPUIDLE_FLAG_POLLING) ||
-	     sleep_length_ns < (u64)TICK_NSEC) && !tick_nohz_tick_stopped()) {
-		*stop_tick = false;
+	*stop_tick = !(drv->states[idx].flags & CPUIDLE_FLAG_POLLING) &&
+		     sleep_length_ns >= (u64)TICK_NSEC &&
+		     nap_state_target_ns(&drv->states[idx]) >
+		     NAP_RESIDENCY_THRESHOLD_NS;
 
+	if (!*stop_tick && !tick_nohz_tick_stopped()) {
 		while (idx > 0 &&
 		       nap_state_target_ns(&drv->states[idx]) >
 		       (u64)delta_tick) {
@@ -702,8 +707,6 @@ static int nap_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 			while (idx > 0 && dev->states_usage[idx].disable)
 				idx--;
 		}
-	} else {
-		*stop_tick = true;
 	}
 
 	d->stats.total_selects++;
@@ -770,26 +773,49 @@ static int nap_enable_device(struct cpuidle_driver *drv,
 			     struct cpuidle_device *dev)
 {
 	struct nap_cpu_data *d = per_cpu_ptr(&nap_data, dev->cpu);
-	struct nap_stats stats = d->stats;
 
-	memset(d, 0, sizeof(*d));
-	d->stats = stats;
+	if (!d->initialized) {
+		struct nap_stats stats = d->stats;
 
-	d->learning_rate_millths = NAP_DEFAULT_LR_MILLTHS;
-	d->max_grad_norm_millths = NAP_DEFAULT_CLAMP_MILLTHS;
-	d->conf_millths = NAP_DEFAULT_CONF_MILLTHS;
-	d->learn_interval = NAP_DEFAULT_INTERVAL;
-	d->learn_jiffies_min = 1;
+		memset(d, 0, sizeof(*d));
+		d->stats = stats;
+
+		d->learning_rate_millths = NAP_DEFAULT_LR_MILLTHS;
+		d->max_grad_norm_millths = NAP_DEFAULT_CLAMP_MILLTHS;
+		d->conf_millths = NAP_DEFAULT_CONF_MILLTHS;
+		d->learn_interval = NAP_DEFAULT_INTERVAL;
+		d->learn_jiffies_min = 1;
+
+		nap_init_weights(&d->weights);
+		d->initialized = true;
+	} else {
+		/* Preserve learned weights, histogram, and sysfs tunables across hotplug/suspend. */
+		d->have_sample = false;
+		d->needs_learn = false;
+		d->reset_pending = false;
+		d->short_circuited = false;
+		d->hist_idx = 0;
+		d->hist_count = 0;
+		d->learn_counter = 0;
+		d->prev_idle_exit = 0;
+	}
 
 	/* force a first-call refresh of the min-valid-state cache */
 	d->cached_min_state_latency = S64_MIN;
 	d->cached_min_state_jiffies = jiffies - NAP_MIN_STATE_REFRESH_JIFFIES;
 
-	nap_init_weights(&d->weights);
 	nap_init_state_data(d, drv);
-	d->initialized = true;
 
 	return 0;
+}
+
+static void nap_disable_device(struct cpuidle_driver *drv,
+			       struct cpuidle_device *dev)
+{
+	struct nap_cpu_data *d = per_cpu_ptr(&nap_data, dev->cpu);
+
+	d->have_sample = false;
+	d->cached_min_state_latency = S64_MIN;
 }
 
 /* ================================================================
@@ -1008,6 +1034,7 @@ static struct cpuidle_governor nap_governor = {
 	 */
 	.rating	= 40,
 	.enable	= nap_enable_device,
+	.disable = nap_disable_device,
 	.select	= nap_select,
 	.reflect = nap_reflect,
 };

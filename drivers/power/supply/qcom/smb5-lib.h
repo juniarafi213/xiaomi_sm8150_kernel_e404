@@ -278,6 +278,8 @@ enum esr_work_status {
 /* for override ffc terminate current */
 #define OVERRIDE_FFC_TERM_CURRENT			820
 
+extern bool skip_thermal;
+
 enum hvdcp3_type {
 	HVDCP3_NONE = 0,
 	HVDCP3_CLASSA_18W,

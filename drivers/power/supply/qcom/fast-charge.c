@@ -14,6 +14,7 @@
 
 #define FAST_CHARGE_VOTER		"FAST_CHARGE_VOTER"
 #define THERMAL_DAEMON_VOTER		"THERMAL_DAEMON_VOTER"
+#define THERMAL_THROTTLE_VOTER		"THERMAL_THROTTLE_VOTER"
 #define RESTRICT_CHG_VOTER		"RESTRICT_CHG_VOTER"
 #define PD_VERIFED_VOTER		"PD_VERIFED_VOTER"
 #define BATT_PROFILE_VOTER		"BATT_PROFILE_VOTER"
@@ -32,8 +33,10 @@ static int init_retry_count;
 
 static void fast_charge_apply(bool enable)
 {
-	struct votable *fcc_votable     = find_votable("FCC");
-	struct votable *usb_icl_votable = find_votable("USB_ICL");
+	struct votable *fcc_votable        = find_votable("FCC");
+	struct votable *usb_icl_votable    = find_votable("USB_ICL");
+	struct votable *cp_disable_votable = find_votable("CP_DISABLE");
+	struct votable *chg_disable_votable = find_votable("CHG_DISABLE");
 
 	skip_thermal = enable;
 
@@ -46,9 +49,16 @@ static void fast_charge_apply(bool enable)
 			vote(fcc_votable, PD_VERIFED_VOTER, false, 0);
 			vote(fcc_votable, BATT_PROFILE_VOTER, false, 0);
 		}
-		if (usb_icl_votable)
+		if (usb_icl_votable) {
 			vote(usb_icl_votable, FAST_CHARGE_VOTER, true,
 			     FAST_CHARGE_ICL_UA);
+			vote(usb_icl_votable, THERMAL_DAEMON_VOTER, false, 0);
+			vote(usb_icl_votable, THERMAL_THROTTLE_VOTER, false, 0);
+		}
+		if (cp_disable_votable)
+			vote(cp_disable_votable, THERMAL_DAEMON_VOTER, false, 0);
+		if (chg_disable_votable)
+			vote(chg_disable_votable, THERMAL_DAEMON_VOTER, false, 0);
 
 		pr_info("fast_charge: enabled — FCC/ICL set to 6A\n");
 	} else {

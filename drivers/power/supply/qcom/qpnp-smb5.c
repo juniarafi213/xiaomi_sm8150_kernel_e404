@@ -1394,6 +1394,11 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 		power_supply_changed(chg->usb_psy);
 		break;
 	case POWER_SUPPLY_PROP_THERM_ICL_LIMIT:
+		if (skip_thermal || disable_thermal) {
+			vote(chg->usb_icl_votable, THERMAL_THROTTLE_VOTER,
+				false, 0);
+			break;
+		}
 		if (!is_client_vote_enabled(chg->usb_icl_votable,
 						THERMAL_THROTTLE_VOTER)) {
 			chg->init_thermal_ua = get_effective_result(

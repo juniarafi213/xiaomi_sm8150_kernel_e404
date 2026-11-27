@@ -1018,7 +1018,7 @@ set_term:
 	smb5_config_iterm(chg, termi, 50);
 
 	rc = vote(chg->fcc_votable, PD_VERIFED_VOTER,
-			!enable, PD_UNVERIFED_CURRENT);
+			!enable && !skip_thermal, PD_UNVERIFED_CURRENT);
 
 	rc = vote(chg->fv_votable, PD_VERIFED_VOTER,
 			!enable, PD_UNVERIFED_VOLTAGE);
@@ -3601,8 +3601,10 @@ static void smblib_thermal_setting_work(struct work_struct *work)
 	struct smb_charger *chg = container_of(work, struct smb_charger,
 						thermal_setting_work.work);
 
-	if (bypass_charging)
+	if (skip_thermal || bypass_charging) {
+		chg->system_temp_level = 0;
 		chg->pps_thermal_level = 0;
+	}
 
 	if (chg->pps_thermal_level > chg->system_temp_level) {
 		if (chg->pps_thermal_level - chg->system_temp_level >= 2)
@@ -3649,7 +3651,9 @@ int smblib_set_prop_system_temp_level(struct smb_charger *chg,
 	if (val->intval > chg->thermal_levels)
 		return -EINVAL;
 
-	chg->system_temp_level = val->intval;
+	chg->system_temp_level = (skip_thermal || bypass_charging) ? 0 : val->intval;
+	if (skip_thermal || bypass_charging)
+		chg->pps_thermal_level = 0;
 
 	if (!(chg->use_bq_pump && is_bq25970_available(chg))) {
 		if (chg->system_temp_level >= (chg->thermal_levels - 1)) {
@@ -3667,19 +3671,20 @@ int smblib_set_prop_system_temp_level(struct smb_charger *chg,
 	if (!(chg->use_bq_pump && is_bq25970_available(chg)) && chg->cp_disable_votable)
 		vote(chg->cp_disable_votable, THERMAL_DAEMON_VOTER, false, 0);
 
-	if (bypass_charging)
-		chg->system_temp_level = 0;
-
 #ifdef CONFIG_THERMAL
-	if (chg->use_bq_pump && is_bq25970_available(chg)
+	if (!skip_thermal && !bypass_charging &&
+			chg->use_bq_pump && is_bq25970_available(chg)
 			&& chg->real_charger_type == POWER_SUPPLY_TYPE_USB_PD) {
 		if (chg->pps_fcc_therm_work_disabled) {
 			chg->pps_thermal_level = chg->system_temp_level;
 			smblib_therm_charging(chg);
 		} else
 			schedule_delayed_work(&chg->thermal_setting_work, 3 * HZ);
-	} else
+	} else {
+		if ((skip_thermal || bypass_charging) && chg->use_bq_pump)
+			cancel_delayed_work(&chg->thermal_setting_work);
 		smblib_therm_charging(chg);
+	}
 #else
 	if (chg->system_temp_level == 0)
 		return vote(chg->fcc_votable, THERMAL_DAEMON_VOTER, false, 0);
@@ -6165,10 +6170,12 @@ int smblib_set_prop_pd_active(struct smb_charger *chg,
 		vote(chg->usb_icl_votable, SW_ICL_MAX_VOTER, false, 0);
 
 		/*set the icl to PD_UNVERIFED_CURRENT when pd is not verifed*/
-		if (!chg->pd_verifed) {
+		if (!chg->pd_verifed && !skip_thermal) {
 			rc = vote(chg->fcc_votable, PD_VERIFED_VOTER, true, PD_UNVERIFED_CURRENT);
 			if (rc < 0)
 				smblib_err(chg, "Couldn't unvote PD_VERIFED_VOTER, rc=%d\n", rc);
+		} else if (skip_thermal) {
+			vote(chg->fcc_votable, PD_VERIFED_VOTER, false, 0);
 		}
 
 		/*
@@ -8194,7 +8201,7 @@ static void typec_src_removal(struct smb_charger *chg)
 	vote(chg->awake_votable, CHG_AWAKE_VOTER, false, 0);
 	vote(chg->fcc_votable, CLASSA_QC_FCC_VOTER, false, 0);
 	vote(chg->fcc_votable, PD_REMOVE_COMP_VOTER, false, 0);
-	vote(chg->fcc_votable, PD_VERIFED_VOTER, true, PD_UNVERIFED_CURRENT);
+	vote(chg->fcc_votable, PD_VERIFED_VOTER, !skip_thermal, PD_UNVERIFED_CURRENT);
 	vote(chg->usb_icl_votable, QC_A_CP_ICL_MAX_VOTER, false, 0);
 	vote(chg->usb_icl_votable, QC2_UNSUPPORTED_VOTER, false, 0);
 	if (chg->use_bq_pump && is_bq25970_available(chg)) {
